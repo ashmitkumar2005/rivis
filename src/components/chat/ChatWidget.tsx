@@ -9,10 +9,11 @@ interface Message {
 }
 
 interface DiscoveryState {
-    phase: "discovery" | "handoff_pending" | "completed";
+    phase: "discovery" | "handoff_pending" | "escalation_pending" | "completed";
     collectedFields: Record<string, string>;
     currentQuestionIndex: number;
     started: boolean;
+    escalationChoice?: "talk_now" | "email_later";
 }
 
 const QUESTIONS = [
@@ -122,22 +123,74 @@ export default function ChatWidget() {
             } else if (state.phase === "handoff_pending") {
                 // Validate Email
                 if (userText.includes("@") && userText.includes(".")) {
+                    // Check Office Hours (CET: Mon-Fri, 09:00 - 18:00)
+                    const now = new Date();
+                    const timeZone = "Europe/Paris";
+                    const day = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(now);
+                    const hour = parseInt(new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hour12: false }).format(now), 10);
+
+                    const isOfficeHours = !["Sat", "Sun"].includes(day) && hour >= 9 && hour < 18;
+
+                    let botContent = "Our team is currently offline. We’ll follow up by email as soon as possible.";
+                    let nextPhase: DiscoveryState["phase"] = "completed";
+
+                    if (isOfficeHours) {
+                        botContent = "Would you like to talk to someone now, or should we follow up later by email?";
+                        nextPhase = "escalation_pending";
+                    }
+
                     const botMessage: Message = {
                         id: (Date.now() + 1).toString(),
                         role: "bot",
-                        content: "Thanks! We'll be in touch shortly.",
+                        content: botContent,
                     };
                     setMessages((msgs) => [...msgs, botMessage]);
                     setDiscoveryState((prev) => ({
                         ...prev,
                         collectedFields: { ...prev.collectedFields, email: userText },
-                        phase: "completed",
+                        phase: nextPhase,
                     }));
                 } else {
                     const botMessage: Message = {
                         id: (Date.now() + 1).toString(),
                         role: "bot",
                         content: "That doesn’t look like a valid email. Could you try again?",
+                    };
+                    setMessages((msgs) => [...msgs, botMessage]);
+                }
+            } else if (state.phase === "escalation_pending") {
+                // Handle escalation choice
+                const lowerText = userText.toLowerCase();
+                let choice: "talk_now" | "email_later" | null = null;
+
+                if (["talk", "now", "human", "connect"].some(w => lowerText.includes(w))) {
+                    choice = "talk_now";
+                } else if (["email", "later", "not now"].some(w => lowerText.includes(w))) {
+                    choice = "email_later";
+                }
+
+                if (choice) {
+                    const botContent = choice === "talk_now"
+                        ? "Got it. Connecting you to a human now…"
+                        : "No problem. We’ll follow up by email soon.";
+
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: botContent,
+                    };
+
+                    setMessages((msgs) => [...msgs, botMessage]);
+                    setDiscoveryState((prev) => ({
+                        ...prev,
+                        escalationChoice: choice,
+                        phase: "completed"
+                    }));
+                } else {
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: "I didn't quite get that. Would you like to 'talk now' or 'email later'?",
                     };
                     setMessages((msgs) => [...msgs, botMessage]);
                 }
