@@ -8,11 +8,38 @@ interface Message {
     content: string;
 }
 
+interface DiscoveryState {
+    phase: "discovery" | "handoff_pending" | "completed";
+    collectedFields: Record<string, string>;
+    currentQuestionIndex: number;
+    started: boolean;
+}
+
+const QUESTIONS = [
+    { key: "projectType", text: "What type of project are you working on?" },
+    { key: "brandName", text: "What is your brand name?" },
+    { key: "industry", text: "Which industry is this for?" },
+    { key: "budget", text: "What is your estimated budget?" },
+    { key: "timeline", text: "What is your timeline?" },
+];
+
 export default function ChatWidget() {
     const [isOpen, setIsOpen] = useState(false);
     const [inputValue, setInputValue] = useState("");
     const [messages, setMessages] = useState<Message[]>([]);
+    const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
+        phase: "discovery",
+        collectedFields: {},
+        currentQuestionIndex: 0,
+        started: false,
+    });
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const discoveryStateRef = useRef(discoveryState);
+
+    useEffect(() => {
+        discoveryStateRef.current = discoveryState;
+    }, [discoveryState]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -22,28 +49,99 @@ export default function ChatWidget() {
         scrollToBottom();
     }, [messages, isOpen]);
 
+    useEffect(() => {
+        const state = discoveryStateRef.current;
+        if (isOpen && !state.started && state.phase === "discovery") {
+            const firstQ = QUESTIONS[0];
+            const botMessage: Message = {
+                id: Date.now().toString(),
+                role: "bot",
+                content: firstQ.text,
+            };
+            setMessages((msgs) => [...msgs, botMessage]);
+            setDiscoveryState((prev) => ({ ...prev, started: true }));
+        }
+    }, [isOpen]);
+
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!inputValue.trim()) return;
+
+        const userText = inputValue.trim();
 
         // Add user message
         const userMessage: Message = {
             id: Date.now().toString(),
             role: "user",
-            content: inputValue.trim(),
+            content: userText,
         };
 
         setMessages((prev) => [...prev, userMessage]);
         setInputValue("");
 
-        // Simulate bot reply
+        // Process discovery flow
         setTimeout(() => {
-            const botMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                role: "bot",
-                content: "Thanks for your message. Fig1 is listening.",
-            };
-            setMessages((prev) => [...prev, botMessage]);
+            const state = discoveryStateRef.current;
+
+            // If already started and in discovery, save answer and move to next
+            if (state.phase === "discovery") {
+                const currentQ = QUESTIONS[state.currentQuestionIndex];
+                const updatedFields = { ...state.collectedFields, [currentQ.key]: userText };
+                const nextIndex = state.currentQuestionIndex + 1;
+
+                if (nextIndex < QUESTIONS.length) {
+                    // Ask next question
+                    const nextQ = QUESTIONS[nextIndex];
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: nextQ.text,
+                    };
+                    setMessages((msgs) => [...msgs, botMessage]);
+                    setDiscoveryState((prev) => ({
+                        ...prev,
+                        collectedFields: updatedFields,
+                        currentQuestionIndex: nextIndex,
+                    }));
+                } else {
+                    // Start Email Handoff
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: "Thanks! I've collected all the details. What’s the best email to reach you?",
+                    };
+                    setMessages((msgs) => [...msgs, botMessage]);
+                    setDiscoveryState((prev) => ({
+                        ...prev,
+                        collectedFields: updatedFields,
+                        currentQuestionIndex: nextIndex,
+                        phase: "handoff_pending",
+                    }));
+                }
+            } else if (state.phase === "handoff_pending") {
+                // Validate Email
+                if (userText.includes("@") && userText.includes(".")) {
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: "Thanks! We'll be in touch shortly.",
+                    };
+                    setMessages((msgs) => [...msgs, botMessage]);
+                    setDiscoveryState((prev) => ({
+                        ...prev,
+                        collectedFields: { ...prev.collectedFields, email: userText },
+                        phase: "completed",
+                    }));
+                } else {
+                    const botMessage: Message = {
+                        id: (Date.now() + 1).toString(),
+                        role: "bot",
+                        content: "That doesn’t look like a valid email. Could you try again?",
+                    };
+                    setMessages((msgs) => [...msgs, botMessage]);
+                }
+            }
         }, 500);
     };
 
@@ -78,8 +176,8 @@ export default function ChatWidget() {
                             >
                                 <div
                                     className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm shadow-sm ${msg.role === "user"
-                                            ? "bg-blue-600 text-white rounded-br-none"
-                                            : "bg-white border border-gray-100 text-gray-800 rounded-bl-none"
+                                        ? "bg-blue-600 text-white rounded-br-none"
+                                        : "bg-white border border-gray-100 text-gray-800 rounded-bl-none"
                                         }`}
                                 >
                                     {msg.content}
